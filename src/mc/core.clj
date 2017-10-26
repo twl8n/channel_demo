@@ -18,6 +18,7 @@
 
 (def turl "https://google.com/")
 (def qlist ["pie" "cake" "cookie" "flan" "mousse" "cupcake" "pudding" "torte"])
+(def default-timeout 10000)
 
 ;; 1149 ms
 (defn ex1 []
@@ -74,6 +75,23 @@
   (r/foldcat (r/map
             #(time (client/get turl {:query-params {"q" %}}))
             qlist)))
+
+(defn ex7
+  "Interestingly, this is one of the faster methods. If every deref hits the timeout, this could take a long time, I guess.
+Maybe using pmap would prevent all the timeouts from blocking?"
+  []
+  (let [thseq (map
+               #(time (future (client/get turl {:query-params {"q" %}})))
+               qlist)]
+    (vec (map #(deref % default-timeout nil) thseq))))
+    
+(defn ex8
+  "Seems to be the same speed as ex7, but harder to read."
+  []
+  (vec (map deref
+            (map
+             #(time (future (client/get turl {:query-params {"q" %}})))
+             qlist))))
 
 (defn use-chans
   "Would using a go with blocking take for reading remove the wait for the last timeout?"
