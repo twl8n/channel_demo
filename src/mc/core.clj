@@ -16,9 +16,44 @@
             [ring.middleware.multipart-params :refer [wrap-multipart-params]])
   (:gen-class))
 
-(def turl "https://google.com/")
+(def turl "http://laudeman.com/")
 (def qlist ["pie" "cake" "cookie" "flan" "mousse" "cupcake" "pudding" "torte"])
 (def default-timeout 10000)
+
+(defn fexmap
+  "Failure as a map instead of an exception. Wrap up exceptions to look like a normal response instead of
+  throwing an exception. Add an error status and the exception message as the body. Valid normal reason-phrase
+  values: OK, Not Found, etc. This situation is not normal, so we add: Error. :trace-redirects is a seq of
+  URLs we were redirected to, if any."
+  [exval]
+  (let [status (cond (some? (re-find #"timeout" exval))
+                     498
+                     :else
+                     499)]
+  {:request-time 0
+   :repeatable? false
+   :streaming? false
+   :chunked? false
+   :reason-phrase "Error"
+   :headers {}
+   :orig-content-encoding nil
+   :status status
+   :length (count exval)
+   :body exval
+   :trace-redirects []}))
+  
+(comment
+  (def xx (fxget "http://httpbin.org/delay/10"))
+  (def xx (fxget "http://httpbin.org/redirect/2"))
+  (def xx (fxget "http://httpbin.org/redirect/1"))
+  )
+
+(defn fxget
+  "Get that will return a failure value, not an exception."
+  [url opts]
+  (try (client/get url opts)
+       (catch Exception e (fexmap (.toString e)))))
+  
 
 ;; 1149 ms
 (defn ex1 []
@@ -40,12 +75,38 @@
   (go (>! mychan (quick-requ "pie")))
   (alts!! [mychan (timeout 10000)]))
 
+
 (defn ex4 []
   (vec (pmap
-        #(time (client/get turl {:query-params {"q" %}}))
+        #(time (client/get turl {:query-params {"q" %} :socket-timeout default-timeout}))
+        qlist)))
+
+(defn ex430 []
+  (vec (pmap
+        #(time (fxget turl {:query-params {"q" %} :socket-timeout 700}))
         qlist)))
 
 
+(defn ex420 []
+  (client/with-connection-pool {:timeout 10000 :threads 4 :insecure? false :default-per-route 10}
+    (vec (pmap
+          #(time (client/get turl {:query-params {"q" %} :socket-timeout default-timeout}))
+          qlist))))
+
+(defn ex421 []
+  (client/with-connection-pool {:timeout 10000 :threads 4 :insecure? false :default-per-route 10}
+    (vec (map
+          #(time (client/get turl {:query-params {"q" %} :socket-timeout default-timeout}))
+          qlist))))
+
+(comment
+  (with-connection-pool {:timeout 5 :threads 4 :insecure? false :default-per-route 10}
+    (get "http://example.org/1")
+    (post "http://example.org/2")
+    (get "http://example.org/3")
+    ...
+    (get "http://example.org/999"))
+  )
 
 (defn ex41 [tout]
   (let [mychan (chan)
@@ -77,8 +138,7 @@
             qlist)))
 
 (defn ex7
-  "Interestingly, this is one of the faster methods. If every deref hits the timeout, this could take a long time, I guess.
-Maybe using pmap would prevent all the timeouts from blocking?"
+  "Interestingly, this is one of the faster methods. Compare this to the source of pmap."
   []
   (let [thseq (map
                #(time (future (client/get turl {:query-params {"q" %}})))
@@ -86,7 +146,7 @@ Maybe using pmap would prevent all the timeouts from blocking?"
     (vec (map #(deref % default-timeout nil) thseq))))
     
 (defn ex8
-  "Seems to be the same speed as ex7, but harder to read."
+  "Seems to be the same speed as ex7, but harder to read. Compare this to the source of pmap."
   []
   (vec (map deref
             (map
