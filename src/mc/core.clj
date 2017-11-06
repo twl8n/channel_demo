@@ -20,42 +20,44 @@
 (def qlist ["pie" "cake" "cookie" "flan" "mousse" "cupcake" "pudding" "torte"])
 (def default-timeout 10000)
 
+
 (defn fexmap
   "Failure as a map instead of an exception. Wrap up exceptions to look like a normal response instead of
   throwing an exception. Add an error status and the exception message as the body. Valid normal reason-phrase
   values: OK, Not Found, etc. This situation is not normal, so we add: Error. :trace-redirects is a seq of
   URLs we were redirected to, if any."
   [exval]
-  (let [status (cond (some? (re-find #"timeout" exval))
-                     498
-                     :else
-                     499)]
-  {:request-time 0
-   :repeatable? false
-   :streaming? false
-   :chunked? false
-   :reason-phrase "Error"
-   :headers {}
-   :orig-content-encoding nil
-   :status status
-   :length (count exval)
-   :body exval
-   :trace-redirects []}))
+  (let [stat-map (cond (some? (re-find #"(?i:timeout|timed out)" exval))
+                       {:status 408
+                        :reason-phrase "Timeout"}
+                       :else ;; There is no http general error, so lets go with the convention(?) of using 520.
+                       {:status 520
+                        :reason-phrase "Unknown Error"})]
+    (merge {:request-time 0
+            :repeatable? false
+            :streaming? false
+            :chunked? false
+            :headers {}
+            :orig-content-encoding nil
+            :length (count exval)
+            :body exval
+            :trace-redirects []} stat-map)))
+
+(defn fxget
+  "Get that will return a failure value, not an exception."
+  ([url]
+   (fxget url {}))
+  ([url opts]
+  (try (client/get url (merge opts {:throw-exceptions false}))
+       (catch Exception e (fexmap (.toString e))))))
   
 (comment
   (def xx (fxget "http://httpbin.org/delay/10"))
   (def xx (fxget "http://httpbin.org/redirect/2"))
   (def xx (fxget "http://httpbin.org/redirect/1"))
+  (def xx (fxget "http://laudeman.com/foo.html/"))
   )
 
-(defn fxget
-  "Get that will return a failure value, not an exception."
-  [url opts]
-  (try (client/get url opts)
-       (catch Exception e (fexmap (.toString e)))))
-  
-
-;; 1149 ms
 (defn ex1 []
   (def yy
     (time 
@@ -76,7 +78,10 @@
   (alts!! [mychan (timeout 10000)]))
 
 
-(defn ex4 []
+(defn ex4
+  "The simplest and one of the fastest examples. This lacks a back-pressure mechanism, but real back pressure
+  requires callbacks. Callbacks are more complex and more likely to fail, often by hanging."
+  []
   (vec (pmap
         #(time (client/get turl {:query-params {"q" %} :socket-timeout default-timeout}))
         qlist)))
@@ -93,20 +98,6 @@
           #(time (client/get turl {:query-params {"q" %} :socket-timeout default-timeout}))
           qlist))))
 
-(defn ex421 []
-  (client/with-connection-pool {:timeout 10000 :threads 4 :insecure? false :default-per-route 10}
-    (vec (map
-          #(time (client/get turl {:query-params {"q" %} :socket-timeout default-timeout}))
-          qlist))))
-
-(comment
-  (with-connection-pool {:timeout 5 :threads 4 :insecure? false :default-per-route 10}
-    (get "http://example.org/1")
-    (post "http://example.org/2")
-    (get "http://example.org/3")
-    ...
-    (get "http://example.org/999"))
-  )
 
 (defn ex41 [tout]
   (let [mychan (chan)
@@ -154,7 +145,8 @@
              qlist))))
 
 (defn use-chans
-  "Would using a go with blocking take for reading remove the wait for the last timeout?"
+  "This waits for tout ms after the last take from mychan, because it has no way to know the channel is
+  empty. Would using a go with blocking take for reading remove the wait for the last timeout?"
   [tout]
   (let [mychan (chan)]
     (mapv #(go (>! mychan (quick-requ %)))
@@ -179,7 +171,7 @@
           (recur (conj hc input) (inc ndx)))))))
 
 (defn multi-chans
-  "Create 4 channels, one for each request."
+  "Create a channel for each request."
   [tout]
   (let [multis (loop [cseq [(chan)]
                        alist qlist]
@@ -190,7 +182,6 @@
                     (if (empty? reman)
                       cseq
                       (recur (conj cseq (chan)) reman))))]
-
      (loop [hc multis
             ndx 0
             rval []]
@@ -198,6 +189,53 @@
          (if (>= ndx (dec (count qlist)))
            rval
            (recur hc (inc ndx) (conj rval input)))))))
+
+(defn mc2
+  "Create a channel for each request. Use a/put! instead of go >! Interesting that this is still slower than ex4."
+  [tout]
+  (let [multis (loop [cseq [(chan)]
+                       alist qlist]
+                  (let [mychan (first cseq)
+                        arg (first alist)
+                        reman (rest alist)]
+                    (a/put! mychan (quick-requ arg))
+                    (if (empty? reman)
+                      cseq
+                      (recur (conj cseq (chan)) reman))))]
+     (loop [hc multis
+            ndx 0
+            rval []]
+       (let [[input channel] (time (alts!! (conj multis (timeout tout))))]
+         (if (>= ndx (dec (count qlist)))
+           rval
+           (recur hc (inc ndx) (conj rval input)))))))
+
+(comment defn go-chan
+  "Create a channel for each request."
+  [tout]
+  (let [multis (loop [cseq []
+                      alist qlist]
+                 (let [arg (first alist)
+                       reman (rest alist)]
+                   (if (empty? reman)
+                     cseq
+                     (recur (conj cseq (go (quick-requ arg))))) reman))]
+     (loop [hc multis
+            ndx 0
+            rval []]
+       (let [[input channel] (time (alts!! (conj multis (timeout tout))))]
+         (if (>= ndx (dec (count qlist)))
+           rval
+           (recur hc (inc ndx) (conj rval input)))))))
+
+;; https://github.com/clojure/core.async/wiki/Go-Block-Best-Practices
+
+(defn foo "this doesn't do anything useful, yet."
+  [params mychan]
+  (a/put! mychan
+          #(time (fxget turl {:query-params {"q" (first params)} :socket-timeout 700}))
+          (fn [_] (foo (next params) mychan))))
+
 
 (comment 
   (time (def xx (multi-chans 5000)))

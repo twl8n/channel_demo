@@ -3,25 +3,36 @@
 
 Fully functional demo of Clojure go and channels doing http requests, with timings.
 
+Using pmap and get is as fast as anything, including using clj-http's built in async and connection pooling.
 
-Uses clj-http which seems simpler than http-async:
+
+Uses clj-http which seems simpler than http-async, using the Apache HTTP client:
 
 https://github.com/dakrone/clj-http
 
+Similar, but using the JRE HttpURLConnection. Has not been updated since 2015. Has very few dependencies:
+
+https://github.com/hiredman/clj-http-lite
+
 #### todo
 
-* try (with-connection-pool ...
+See ex420 with-connection-pool.
+
+See ex41 for an example using built in async.
 
 * try (with-async-connection-pool ...
 
+
 #### Catching exceptions in threads
+
+I strongly prefer failure values over exceptions. Thus defn fxget. The failure map is like the normal response
+map, but with appropriate value subsitutions, especially :status and :body.
 
 https://adambard.com/blog/acceptable-error-handling-in-clojure/
 
 https://brehaut.net/blog/2011/error_monads
 
 https://stuartsierra.com/2015/05/27/clojure-uncaught-exceptions
-
 
 ```
 ;; Assuming require [clojure.tools.logging :as log]
@@ -36,9 +47,6 @@ Test for timeout:
 ```
 (client/get "http://httpbin.org/delay/50")
 ```
-
-My preference is not to have exceptions. I will wrap this up in a normal response, but with an appropriate
-status and a nil or "" :body.
 
 ```
 mc.core=> (client/get "http://httpbin.org/delay/5" {:conn-timeout 50})
