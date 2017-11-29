@@ -1,14 +1,12 @@
 (ns mc.core
   (:require [clj-http.client :as client]
             [clojure.core.reducers :as r]
-            [clojure.core.async
-             :as a
-             :refer [>! <! >!! <!! go chan buffer close! thread
-                     alts! alts!! timeout]]
+            [clojure.core.async :as async] ;; [>! <! >!! <!! go chan buffer close! thread alts! alts!! timeout put!]]
             [clojure.java.jdbc :as jdbc] ;; :refer :all]
             [clojure.tools.namespace.repl :as tns]
             [clojure.string :as str]
             [clojure.pprint :refer :all]
+            [clojure.repl :refer [doc]]
             [clostache.parser :refer [render]]
             [ring.adapter.jetty :as ringa]
             [ring.util.response :as ringu]
@@ -73,9 +71,9 @@
   (client/get turl {:query-params {"q" xx}}))
 
 (defn ex3 []
-  (def mychan (chan))
-  (go (>! mychan (quick-requ "pie")))
-  (alts!! [mychan (timeout 10000)]))
+  (def mychan (async/chan))
+  (async/go (async/>! mychan (quick-requ "pie")))
+  (async/alts!! [mychan (async/timeout 10000)]))
 
 
 (defn ex4
@@ -100,17 +98,17 @@
 
 
 (defn ex41 [tout]
-  (let [mychan (chan)
+  (let [mychan (async/chan)
         all-e []]
     (mapv
      #(client/get turl {:async? true
                         :query-params {"q" %}}
-                  (fn [xx] (>!! mychan xx))
+                  (fn [xx] (async/>!! mychan xx))
                   (fn [xx] (conj all-e xx)))
      qlist)
     (loop [hc []
            ndx 0]
-      (let [[input channel] (time (alts!! [mychan (timeout tout)]))]
+      (let [[input channel] (time (async/alts!! [mychan (async/timeout tout)]))]
         (if (>= ndx (- (count qlist) 1))
           hc
           (recur (conj hc input) (inc ndx)))))))
@@ -148,11 +146,11 @@
   "This waits for tout ms after the last take from mychan, because it has no way to know the channel is
   empty. Would using a go with blocking take for reading remove the wait for the last timeout?"
   [tout]
-  (let [mychan (chan)]
-    (mapv #(go (>! mychan (quick-requ %)))
+  (let [mychan (async/chan)]
+    (mapv #(async/go (async/>! mychan (quick-requ %)))
           qlist)
     (loop [hc []]
-      (let [[input channel] (time (alts!! [mychan (timeout tout)]))]
+      (let [[input channel] (time (async/alts!! [mychan (async/timeout tout)]))]
         (if (nil? input)
           hc
           (recur (conj hc input)))))))
@@ -160,12 +158,12 @@
 (defn fixed-chans
   "Single channel, fixed number of takes. Take as many items as were put. The timeout is only a safety net."
   [tout]
-  (let [mychan (chan)]
-    (mapv #(go (>! mychan (quick-requ %)))
+  (let [mychan (async/chan)]
+    (mapv #(async/go (async/>! mychan (quick-requ %)))
           qlist)
     (loop [hc []
            ndx 0]
-      (let [[input channel] (time (alts!! [mychan (timeout tout)]))]
+      (let [[input channel] (time (async/alts!! [mychan (async/timeout tout)]))]
         (if (>= ndx (- (count qlist) 1))
           hc
           (recur (conj hc input) (inc ndx)))))))
@@ -173,19 +171,19 @@
 (defn multi-chans
   "Create a channel for each request."
   [tout]
-  (let [multis (loop [cseq [(chan)]
+  (let [multis (loop [cseq [(async/chan)]
                        alist qlist]
                   (let [mychan (first cseq)
                         arg (first alist)
                         reman (rest alist)]
-                    (go (>! mychan (quick-requ arg)))
+                    (async/go (async/>! mychan (quick-requ arg)))
                     (if (empty? reman)
                       cseq
-                      (recur (conj cseq (chan)) reman))))]
+                      (recur (conj cseq (async/chan)) reman))))]
      (loop [hc multis
             ndx 0
             rval []]
-       (let [[input channel] (time (alts!! (conj multis (timeout tout))))]
+       (let [[input channel] (time (async/alts!! (conj multis (async/timeout tout))))]
          (if (>= ndx (dec (count qlist)))
            rval
            (recur hc (inc ndx) (conj rval input)))))))
@@ -193,19 +191,19 @@
 (defn mc2
   "Create a channel for each request. Use a/put! instead of go >! Interesting that this is still slower than ex4."
   [tout]
-  (let [multis (loop [cseq [(chan)]
+  (let [multis (loop [cseq [(async/chan)]
                        alist qlist]
                   (let [mychan (first cseq)
                         arg (first alist)
                         reman (rest alist)]
-                    (a/put! mychan (quick-requ arg))
+                    (async/put! mychan (quick-requ arg))
                     (if (empty? reman)
                       cseq
-                      (recur (conj cseq (chan)) reman))))]
+                      (recur (conj cseq (async/chan)) reman))))]
      (loop [hc multis
             ndx 0
             rval []]
-       (let [[input channel] (time (alts!! (conj multis (timeout tout))))]
+       (let [[input channel] (time (async/alts!! (conj multis (async/timeout tout))))]
          (if (>= ndx (dec (count qlist)))
            rval
            (recur hc (inc ndx) (conj rval input)))))))
@@ -219,11 +217,11 @@
                        reman (rest alist)]
                    (if (empty? reman)
                      cseq
-                     (recur (conj cseq (go (quick-requ arg))))) reman))]
+                     (recur (conj cseq (async/go (quick-requ arg))))) reman))]
      (loop [hc multis
             ndx 0
             rval []]
-       (let [[input channel] (time (alts!! (conj multis (timeout tout))))]
+       (let [[input channel] (time (async/alts!! (conj multis (async/timeout tout))))]
          (if (>= ndx (dec (count qlist)))
            rval
            (recur hc (inc ndx) (conj rval input)))))))
@@ -232,7 +230,7 @@
 
 (defn foo "this doesn't do anything useful, yet."
   [params mychan]
-  (a/put! mychan
+  (async/put! mychan
           #(time (fxget turl {:query-params {"q" (first params)} :socket-timeout 700}))
           (fn [_] (foo (next params) mychan))))
 
@@ -244,4 +242,72 @@
   ;; Make sure we got complete results
   (map #(count (:body %)) yy)
   )
+
+
+;; mc.core=> (def ic (mpc))
+;; #'mc.core/ic
+;; mc.core=> ic
+;; #object[clojure.core.async.impl.channels.ManyToManyChannel 0x4cef23ca "clojure.core.async.impl.channels.ManyToManyChannel@4cef23ca"]
+;; mc.core=> (async/>!! ic "foo")
+;; We only accept numeric values! No Number, No Clothes!
+;; true
+;; mc.core=> (async/>!! ic 5)
+;; "woo: " true
+;; 5
+;; mc.core=> 
+
+(defn mpc []
+  (let [payments (async/chan)]
+    (async/go (while true
+          (let [in (async/<! payments)]
+            (if (number? in)
+              (do (prn "woo: " in))
+              ;; (do (println (async/<!! warehouse-channel)))
+              (println "We only accept numeric values! No Number, No Clothes!")))))
+    payments))
+
+(comment
+  (def ff (mpx))
+  ;; If we listen for good data to stop looping, then send data.
+  ;; If there are many listeners, each one would have to push 1 back onto the channel for the others.
+  (async/>!! ff 1)
+
+  ;; If we listen for non-nil (as below), then close the channel
+  ;; This will allow many listeners on a single channel to all stop.
+  (async/close! ff)
+  )
+
+(defn mpx
+  "Print a message every 1000 ms in the background. Check the ctl channel, and if any input then close the
+  channel and exit the loop."
+  []
+  (let [ctl (async/chan)]
+  (async/go-loop [tchan ctl]
+    (let [[input channel] (async/alts! [tchan] :default true)]
+      (prn "input: " input)
+      (if (nil? input)
+        (do
+          (prn "Stopping loop.")
+          ;; (async/close! tchan)
+          true)
+        (do
+          (Thread/sleep 1000)
+          (prn "Still alive")
+          (recur tchan)))))
+  ctl))
+
+
+(comment
+  (close! bg)
+  )
+
+(defn bgp []
+  (async/go (doseq [xx (range 10)]
+        (Thread/sleep 1000)
+          (prn "this is bgp"))))
+
+(defn bga []
+  (async/go (doseq [xx (range 10)]
+        (Thread/sleep 1000)
+          (prn "this is bga"))))
 
