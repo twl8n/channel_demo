@@ -3,6 +3,7 @@
             [clojure.core.reducers :as r]
             [clojure.core.async :as async] ;; [>! <! >!! <!! go chan buffer close! thread alts! alts!! timeout put!]]
             [clojure.java.jdbc :as jdbc] ;; :refer :all]
+            [clojure.java.io :as io]
             [clojure.tools.namespace.repl :as tns]
             [clojure.string :as str]
             [clojure.pprint :refer :all]
@@ -48,8 +49,28 @@
   ([url opts]
   (try (client/get url (merge opts {:throw-exceptions false}))
        (catch Exception e (fexmap (.toString e))))))
+
+(defn fxget-binary
+  "Get that will return a failure value, not an exception."
+  ([url]
+   (fxget-binary url {}))
+  ([url opts]
+   (let [dest-file (nth (re-find  #"https://.*/(.*?)(?:\?.*$|$)" url) 1)
+         resp (try (client/get url (merge opts {:as :byte-array :throw-exceptions false}))
+                   (catch Exception e (fexmap (.toString e))))
+         img (:body resp)]
+     (if (some? img)
+       (do
+         (with-open [wr (io/output-stream dest-file)]
+           (.write wr img))
+         (str "Wrote " dest-file))
+       (str "Failed on " dest-file)))))
   
+
+
 (comment
+  (fxget-binary "https://img.nh-hotels.net/nh_collection_aeropuerto_t2_mexico-046-restaurant.jpg?crop=1535:619;0,332&resize=2000:805")
+
   (def xx (fxget "http://httpbin.org/delay/10"))
   (def xx (fxget "http://httpbin.org/redirect/2"))
   (def xx (fxget "http://httpbin.org/redirect/1"))
