@@ -41,29 +41,52 @@
             :body exval
             :trace-redirects []} stat-map)))
 
+;; https://stackoverflow.com/questions/8558362/writing-to-a-file-in-clojure
+;; ...  BufferedWriter has multiple overloaded versions of write and clojure doesn't know which one to call.
+;; Java sucks. 
+
+(comment 
+  (type (byte-array (map byte (vec "foo"))))
+  (instance? (Class/forName "[B") (byte-array (map byte (vec "foo"))))
+  (def byte-array-type (Class/forName "[B"))
+  (instance? byte-array-type (byte-array (map byte (vec "foo"))))
+  ;; true
+
+  )
+
+(def byte-array-type (Class/forName "[B"))
+
+  ;; ([url dest-file]
+  ;;  (log/info "got " url dest-file)
+;;  (fxget-binary url {:socket-timeout default-timeout :as :byte-array :throw-exceptions false}))
+
+(def opts {:socket-timeout default-timeout :as :byte-array :throw-exceptions false})
+
 (defn fxget-binary
   "Get that will return a failure value, not an exception. Call without opts for defaults, or with opts to
   ignore the defaults."
-  ([url]
-   (log/info "Starting outer" url)
-   (fxget-binary url {:socket-timeout default-timeout :as :byte-array :throw-exceptions false}))
-  ([url opts]
-   (log/info "Starting inner" url)
-   (let [https-url (str/replace url #"http://" "https://")
-         dest-file (str "images/" (nth (re-find  #"http.*://.*/(.*?)(?:\?.*$|$)" https-url) 1))
-         resp (try (client/get https-url opts)
+  [url dest-file]
+   (let [resp (try (client/get url opts)
                    (catch Exception e (fexmap (.toString e))))
          img (:body resp)]
-     (if (some? img)
+     (if (and (some? img)
+              (instance? byte-array-type img)
+              (= (:status resp) 200))
        (do
          (with-open [wr (io/output-stream dest-file)]
            (.write wr img))
-         (log/info "Wrote " dest-file))
-       (log/info "Failed on " dest-file)))))
-
+         (log/info "Wrote " dest-file " img is " (type img)))
+       (log/info "Failed on " dest-file " status: " (:status resp)))))
 
 (defn -main []
-  (let [url-list (str/split (slurp "image_urls.txt") #"\n")]
+  (let [url-list (str/split (slurp "image_urls.txt") #"\n")
+        hu-list (map #(str/replace % #"http://" "https://") url-list)
+        df-list (map #(str "./images/" (nth (re-find  #"http.*://.*/(.*?)(?:\?.*$|$)" %) 1)) hu-list)
+        flist (mapv str (filter #(.isFile %) (file-seq (clojure.java.io/file "./images/"))))
+        ;; names-only (map #(str/replace % #"^\./images/" "") flist)
+        ;; zipmap is cute, but probably better off with list of maps {:dest-file "xx" :url "yy"}
+        big-list (zipmap df-list hu-list)
+        final-list (apply dissoc big-list flist)]
     ;; make-parents is weird. Must be a better way.
     (io/make-parents "./images/foo.txt")
-    (count (vec (pmap #(fxget-binary %) url-list)))))
+    (count (vec (pmap #(fxget-binary (second %) (first %)) final-list)))))

@@ -16,6 +16,12 @@ https://github.com/hiredman/clj-http-lite
 
 #### todo
 
+Run the image downloader. Requires a list of image urls in image_urls.txt.
+
+```
+lein run -m mc.image-down/-main < /dev/null > run.log 2>&1 &
+```
+
 See ex420 with-connection-pool.
 
 See ex41 for an example using built in async.
