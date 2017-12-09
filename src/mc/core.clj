@@ -3,7 +3,7 @@
             [clojure.core.reducers :as r]
             [clojure.core.async
              :as a
-             :refer [>! <! >!! <!! go chan buffer close! thread
+             :refer [>! <! >!! <!! go chan buffer close! thread go-loop
                      alts! alts!! timeout]]
             [clojure.java.jdbc :as jdbc] ;; :refer :all]
             [clojure.tools.namespace.repl :as tns]
@@ -19,7 +19,6 @@
 (def turl "http://laudeman.com/")
 (def qlist ["pie" "cake" "cookie" "flan" "mousse" "cupcake" "pudding" "torte"])
 (def default-timeout 10000)
-
 
 (defn fexmap
   "Failure as a map instead of an exception. Wrap up exceptions to look like a normal response instead of
@@ -245,3 +244,36 @@
   (map #(count (:body %)) yy)
   )
 
+(comment
+  (defn foo []
+    (println "Running forever...?")
+    (a/<!! (a/go-loop [n 0]
+             (prn n)
+             (a/<! (a/timeout 10))
+             (recur (inc n)))))
+  
+  (go-loop [seconds 1]
+    (<! (timeout 1000))
+    (print "waited" seconds "seconds")
+    (recur (inc seconds)))
+  )
+
+
+(defn multi-reporter []
+  (let [a (chan)  ; a channel for a to report it's answer
+        b (chan)  ; a channel for b to report it's answer
+        output (chan)] ; a channel for the reporter to report back to the repl
+    (go (while true
+          (<!! (timeout (rand-int 1000))) ; process a
+          (>! a (rand-nth [true false]))))
+    (go (while true
+          (<!! (timeout (rand-int 1000))) ; process b
+          (>! b (rand-nth [true false]))))
+    ;; the reporter process
+    (<!! (go (while true
+          ;; (>! output (and (<!! a) (<!! b)))
+          ;; (>! output (and (<!! a) (<!! b)))
+          (do
+            (prn "output: " (and (<!! a) (<!! b)))
+            true))))
+    output))
