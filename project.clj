@@ -12,6 +12,7 @@
                  [org.xerial/sqlite-jdbc "3.7.2"]
                  [de.ubercode.clostache/clostache "1.4.0"]
                  ;; [cljstache "2.0.0"]
+                 [org.clojure/tools.logging "0.4.0"]
                  [org.clojure/tools.namespace "0.2.11"]
                  [ring "1.5.0"]
                  [ring/ring-core "1.2.1"]
