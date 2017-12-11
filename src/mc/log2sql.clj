@@ -19,6 +19,11 @@
 ;; Don't forget to create the table
 ;; cat schema.sql | sqlite3 logger.db
 
+;; (tns/refresh) ;; before changing namespace
+;; (ns mc.log2sql)
+;; (time (ex-3))
+;; (tns/refresh) ;; after any code changes
+
 (def db
   {:classname   "org.sqlite.JDBC"
    :subprotocol "sqlite"
@@ -35,6 +40,16 @@
         data-yy (mapv (fn [xx] ["2017-12-10" xx]) (range 1000 2000))]
      (doseq [params (into data-xx data-yy)]
        (jdbc/execute! conn (apply conj ["insert into log (date,msg) values (?,?)"] params)))
+     true))
+
+(defn ex-5
+  "Like ex-3, with prepared statement. Same execution time with sqlite."
+  []
+  (let [sth (jdbc/prepare-statement (:connection conn) "insert into log (date,msg) values (?,?)")
+        data-xx (mapv (fn [xx] ["2017-12-10" xx]) (range 0 1000))
+        data-yy (mapv (fn [xx] ["2017-12-10" xx]) (range 1000 2000))]
+    (jdbc/execute! conn (apply conj [sth] data-xx) {:multi? true})
+    (jdbc/execute! conn (apply conj [sth] data-yy) {:multi? true})
      true))
 
 (defn ex-3
