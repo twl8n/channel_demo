@@ -41,10 +41,6 @@
             :body exval
             :trace-redirects []} stat-map)))
 
-;; https://stackoverflow.com/questions/8558362/writing-to-a-file-in-clojure
-;; ...  BufferedWriter has multiple overloaded versions of write and clojure doesn't know which one to call.
-;; Java sucks. 
-
 (comment 
   (type (byte-array (map byte (vec "foo"))))
   (instance? (Class/forName "[B") (byte-array (map byte (vec "foo"))))
@@ -54,13 +50,18 @@
 
   )
 
-(def byte-array-type (Class/forName "[B"))
-
   ;; ([url dest-file]
   ;;  (log/info "got " url dest-file)
 ;;  (fxget-binary url {:socket-timeout default-timeout :as :byte-array :throw-exceptions false}))
 
 (def opts {:socket-timeout default-timeout :as :byte-array :throw-exceptions false})
+
+;; https://stackoverflow.com/questions/8558362/writing-to-a-file-in-clojure
+;; ...  BufferedWriter has multiple overloaded versions of write and clojure doesn't know which one to call.
+;; Java sucks. That said, when the response is a string 404, we shouldn't write that into a file with a .jpg
+;; extension.
+
+(def byte-array-type (Class/forName "[B"))
 
 (defn fxget-binary
   "Get that will return a failure value, not an exception. Call without opts for defaults, or with opts to
