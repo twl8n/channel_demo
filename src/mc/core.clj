@@ -4,7 +4,7 @@
             [clojure.core.async :as async] ;; [>! <! >!! <!! go chan buffer close! thread alts! alts!! timeout put! go-loop]]
             [clojure.java.jdbc :as jdbc] ;; :refer :all]
             [clojure.java.io :as io]
-            [clojure.tools.namespace.repl :as tns]
+            [clojure.tools.namespace.repl :as tnr]
             [clojure.string :as str]
             [clojure.pprint :refer :all]
             [clojure.repl :refer [doc]]
@@ -18,6 +18,7 @@
 (def turl "http://laudeman.com/")
 (def qlist ["pie" "cake" "cookie" "flan" "mousse" "cupcake" "pudding" "torte"])
 (def default-timeout 10000)
+(def tout default-timeout)
 
 (defn fexmap
   "Failure as a map instead of an exception. Wrap up exceptions to look like a normal response instead of
@@ -362,3 +363,88 @@
   (async/go (doseq [xx (range 10)]
         (Thread/sleep 1000)
           (prn "this is bga"))))
+
+;; Logging via an agent
+(def ag-log (agent []))
+
+(defn agent-printf
+  "Overload printf with printf to an agent"
+  []
+  (def core-printf clojure.core/printf)
+  (defn printf [fmt & args]
+    ;; (prn "have: " args)
+    (send ag-log #(conj % (with-out-str (apply core-printf fmt args))))))
+
+(defn test-ag []
+  (agent-printf)
+  ;; Agents don't die, so set/reset the value of our agent, in case this fn is run multiple times.
+  (send ag-log (fn [xx] []))
+  (doseq [cc (range 2048)]
+    (printf "this is %s\n" cc))
+  (await-for 10000 ag-log)
+  (println "Have " (count @ag-log) " log messages."))
+
+;; This appears to work, and test-big-p below does not.
+(defn test-ag-p []
+  (agent-printf)
+  ;; Agents don't die, so set/reset the value of our agent, in case this fn is run multiple times.
+  (send ag-log (fn [xx] []))
+  (doall (pmap #(printf "this is %s\n" %) (range 2048)))
+  (await-for 10000 ag-log)
+  (println "Have " (count @ag-log) " log messages."))
+
+
+;; Logging via an atom. 
+(def all-log (atom []))
+
+(defn atom-printf
+  "Overload printf with printf to an atom"
+  []
+  (def core-printf clojure.core/printf)
+  (defn printf [fmt & args]
+    (swap! all-log #(conj % (with-out-str (apply core-printf fmt args))))))
+
+(defn test-atom []
+  (atom-printf)
+  (swap! all-log (fn [xx] []))
+  (doseq [cc (range 2048)]
+    (printf "this is %s\n" cc))
+  (println "Have " (count @all-log) " log messages."))
+
+(defn test-atom-p []
+  (atom-printf)
+  (swap! all-log (fn [xx] []))
+  (doall (pmap #(printf "this is %s\n" %) (range 2048)))
+  (println "Have " (count @all-log) " log messages."))
+  
+;; Demo logging via a channel.
+
+;; Channel for log messages
+(def logch (async/chan))
+
+(defn channel-printf
+  "Overload printf with printf to a channel"
+  []
+  (def core-printf clojure.core/printf)
+  (defn printf [fmt & args]
+    (async/put! logch (with-out-str (apply core-printf fmt args)))))
+
+(defn log-msgs []
+  (loop [hc []]
+    (let [[input channel] (async/alts!! [logch (async/timeout tout)])]
+      (if (nil? input)
+        hc
+        (recur (conj hc input))))))
+
+;; This only works for < 1024 messages:
+
+;; AssertionError Assert failed: No more than 1024 pending puts are allowed on a single channel. Consider using a windowed buffer.
+;; (< (.size puts) impl/MAX-QUEUE-SIZE)  clojure.core.async.impl.channels.ManyToManyChannel (channels.clj:152)
+
+(defn test-logs []
+  (channel-printf)
+  (doseq [cc (range 1023)]
+    (printf "this is %s\n" cc))
+  (let [msg (log-msgs)]
+    (println "Have " (count msg) " log messages.")))
+
