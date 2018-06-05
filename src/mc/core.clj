@@ -364,6 +364,25 @@
         (Thread/sleep 1000)
           (prn "this is bga"))))
 
+;; Async http get requests via 4 agents.
+(def ag-list (map (fn [xx] (agent [])) (range 4)))
+
+(defn agent-get [myagent short-qlist]
+  (prn "mya: " myagent)
+  (doall (map
+   (fn [qparam] (send myagent #(conj % (client/get turl {:query-params {"q" qparam}}))))
+   short-qlist)))
+
+(defn ex-agent []
+  (prn "ag-list: " ag-list)
+  (doall (map (fn [ag ql]
+         (prn "ag: " ag "ql: " ql)
+         (send ag (fn [xx] []))
+         (agent-get ag ql)) ag-list (partition 2 qlist)))
+  (apply await-for 10000 ag-list)
+  (map #(prn (count (deref %))) ag-list))
+;; (count (:body (first (deref (first ag-list)))))
+
 ;; Logging via an agent
 (def ag-log (agent []))
 
