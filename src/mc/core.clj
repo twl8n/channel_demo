@@ -190,10 +190,32 @@
           (recur (conj hc input) (inc ndx)))))))
 
 (defn multi-chans
-  "Create a channel for each request."
+  "Create a channel for each request. Using logs of channels doesn't seem to help."
+  [tout]
+  (let [multis (loop [cseq []
+                       alist qlist]
+                  (let [mychan (async/chan)
+                        arg (first alist)
+                        reman (rest alist)]
+                    (async/go (async/>! mychan (quick-requ arg)))
+                    (if (empty? reman)
+                      cseq
+                      (recur (conj cseq mychan) reman))))]
+     (loop [hc multis
+            ndx 0
+            rval []]
+       (let [[input channel] (time (async/alts!! (conj multis (async/timeout tout))))]
+         (if (>= ndx (dec (count qlist)))
+           rval
+           (recur hc (inc ndx) (conj rval input)))))))
+
+(defn multi-chans-buggy
+  "Create lot of channel, but the bug it that we use one channel for all requests. 
+  Speed is about the same as the non-buggy version above."
   [tout]
   (let [multis (loop [cseq [(async/chan)]
                        alist qlist]
+                 ;; Bug! conj post-pends, so (first cseq) is always the same channel
                   (let [mychan (first cseq)
                         arg (first alist)
                         reman (rest alist)]
@@ -408,10 +430,40 @@
   (agent-printf)
   ;; Agents don't die, so set/reset the value of our agent, in case this fn is run multiple times.
   (send ag-log (fn [xx] []))
-  (doall (pmap #(printf "this is %s\n" %) (range 2048)))
-  (await-for 10000 ag-log)
+  (time (do (doall (pmap #(printf "this is %s\n" %) (range 1000)))
+            (await-for 10000 ag-log)))
   (println "Have " (count @ag-log) " log messages."))
 
+;; Slower than test-ag-p above. Almost 4x slower.
+;; Run this via run-mca below so that setup and post-run printing isn't counted in time.
+(defn multi-channel-agent
+  "Create lots of channels all writing to a single agent in an attempt to deadlock or slow the agent."
+  [tout]
+  (let [run-size 1000 ;; Must be less than impl/MAX-QUEUE-SIZE
+        multis (loop [cseq []
+                      alist (range run-size)]
+                 (let [mychan (async/chan)
+                       arg (first alist)
+                       reman (rest alist)]
+                   (async/go (async/>! mychan (printf "this is %s\n" arg)))
+                   (if (empty? reman)
+                     cseq
+                     (recur (conj cseq mychan) reman))))]
+    (loop [hc multis
+           ndx 0
+           rval []]
+      (let [[input channel] (async/alts!! (conj multis (async/timeout tout)))]
+        (if (>= ndx (dec run-size))
+          rval
+          (recur hc (inc ndx) (conj rval input)))))))
+
+(defn run-mca []
+  (agent-printf)
+  (send ag-log (fn [xx] []))
+  (time (do (multi-channel-agent 1)
+            (await-for 10000 ag-log)))
+  (prn "first: " (first @ag-log))
+  (println "Have " (count @ag-log) " log messages."))
 
 ;; Logging via an atom. 
 (def all-log (atom []))
